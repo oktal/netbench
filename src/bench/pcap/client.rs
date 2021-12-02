@@ -1,3 +1,4 @@
+use pcap::Capture;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::eth;
@@ -18,19 +19,17 @@ impl PcapClient {
     pub fn run(self, config: &PcapBenchConfiguration) -> BenchResult {
         println!("Running client with configuration {:#?}", config);
 
-        let src_addr = mac::get_hardware_address(&config.src_iface).ok_or("Failed to retrieve mac address")?;
-        let device = find_device(&config.src_iface).ok_or("Failed to find device")?;
-
-        let mut capture = device.open()?;
+        let mut capture = Capture::from_device(config.src_iface.as_ref())?;
+        let mut capture = capture.immediate_mode(true).open()?;
 
         let mut buffer = [0u8; eth::ETH_LEN];
 
-        eth::writer::write_source_addr(&mut buffer, &src_addr);
+        eth::writer::write_source_addr(&mut buffer, &config.src_addr);
         eth::writer::write_destination_addr(&mut buffer, &config.dst_addr);
         eth::writer::write_ether_type(&mut buffer, super::ETHER_TYPE);
 
         for i in 0..config.packets_to_send {
-            let seq = i as u16;
+            let seq = i as u64;
 
             let utc_now = SystemTime::now();
             let nano_epoch = utc_now
@@ -38,11 +37,11 @@ impl PcapClient {
                 .as_nanos();
 
             // Copy sequence number
-            eth::writer::slice_payload(&mut buffer, 0, 2)
+            eth::writer::slice_payload(&mut buffer, 0, std::mem::size_of_val(&seq))
                 .copy_from_slice(&seq.to_le_bytes());
 
             // Copy timestamp
-            eth::writer::slice_payload(&mut buffer, 2, std::mem::size_of_val(&nano_epoch))
+            eth::writer::slice_payload(&mut buffer, 8, std::mem::size_of_val(&nano_epoch))
                 .copy_from_slice(&nano_epoch.to_le_bytes());
 
             if config.verbose {
